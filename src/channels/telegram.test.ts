@@ -541,7 +541,7 @@ describe('TelegramChannel', () => {
   // --- Non-text messages ---
 
   describe('non-text messages', () => {
-    it('stores photo with placeholder', async () => {
+    it('stores photo with fallback on download failure', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -549,13 +549,14 @@ describe('TelegramChannel', () => {
       const ctx = createMediaCtx({});
       await triggerMediaMessage('message:photo', ctx);
 
+      // Photo handler falls back to placeholder when API is unavailable in tests
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
-        expect.objectContaining({ content: '[Photo]' }),
+        expect.objectContaining({ content: '[Photo - failed to process]' }),
       );
     });
 
-    it('stores photo with caption', async () => {
+    it('stores photo with caption on download failure', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -565,7 +566,9 @@ describe('TelegramChannel', () => {
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
-        expect.objectContaining({ content: '[Photo] Look at this' }),
+        expect.objectContaining({
+          content: '[Photo - failed to process] Look at this',
+        }),
       );
     });
 
