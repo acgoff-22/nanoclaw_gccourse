@@ -8,7 +8,7 @@ import {
   hasValidOAuthCredentials,
   switchAuthMode,
 } from '../auth-switch.js';
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, DATA_DIR, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { downloadFile, processImage } from '../image.js';
@@ -137,9 +137,17 @@ export class TelegramChannel implements Channel {
 
       switchAuthMode(newMode as 'api-key' | 'oauth');
       const label = newMode === 'api-key' ? 'API Key' : 'OAuth (Subscription)';
-      ctx.reply(`Switched to *${label}*. Restarting service...`, {
+      ctx.reply(`Switching to *${label}*...`, {
         parse_mode: 'Markdown',
       });
+
+      // Write flag so the bot sends a ready message after restart
+      const flagPath = path.join(DATA_DIR, 'auth-switch-pending.json');
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(
+        flagPath,
+        JSON.stringify({ chatId: ctx.chat.id, mode: newMode }),
+      );
 
       // Restart the service so the credential proxy picks up the new mode
       logger.info({ newMode }, 'Auth mode changed, restarting service');
@@ -380,7 +388,7 @@ export class TelegramChannel implements Channel {
     // Start polling — returns a Promise that resolves when started
     return new Promise<void>((resolve) => {
       this.bot!.start({
-        onStart: (botInfo) => {
+        onStart: async (botInfo) => {
           logger.info(
             { username: botInfo.username, id: botInfo.id },
             'Telegram bot connected',
@@ -389,6 +397,27 @@ export class TelegramChannel implements Channel {
           console.log(
             `  Send /chatid to the bot to get a chat's registration ID\n`,
           );
+
+          // Send ready message if auth was just switched
+          try {
+            const flagPath = path.join(DATA_DIR, 'auth-switch-pending.json');
+            if (fs.existsSync(flagPath)) {
+              const flag = JSON.parse(fs.readFileSync(flagPath, 'utf-8'));
+              fs.unlinkSync(flagPath);
+              const mode = getCurrentAuthMode();
+              const label =
+                mode === 'api-key' ? 'API Key' : 'OAuth (Subscription)';
+              await sendTelegramMessage(
+                this.bot!.api,
+                flag.chatId,
+                `${ASSISTANT_NAME} is back online.\nAuth mode: *${label}*`,
+                {},
+              );
+            }
+          } catch (err) {
+            logger.debug({ err }, 'Failed to send auth switch notification');
+          }
+
           resolve();
         },
       });
