@@ -1,4 +1,4 @@
-import { Channel, NewMessage } from './types.js';
+import { Channel, MessageImage, NewMessage } from './types.js';
 import { formatLocalTime } from './timezone.js';
 
 export function escapeXml(s: string): string {
@@ -8,6 +8,17 @@ export function escapeXml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/**
+ * Collect all images from a batch of messages.
+ */
+export function collectImages(messages: NewMessage[]): MessageImage[] {
+  const images: MessageImage[] = [];
+  for (const m of messages) {
+    if (m.images) images.push(...m.images);
+  }
+  return images;
 }
 
 export function formatMessages(

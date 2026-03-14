@@ -1,8 +1,12 @@
+import fs from 'fs';
 import https from 'https';
+import path from 'path';
 import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
+import { downloadFile, processImage } from '../image.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -51,6 +55,10 @@ export class TelegramChannel implements Channel {
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
     this.opts = opts;
+  }
+
+  private resolveGroupDir(folder: string): string {
+    return resolveGroupFolderPath(folder);
   }
 
   async connect(): Promise<void> {
@@ -193,12 +201,108 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+      const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
+
+      try {
+        // Get the largest photo (last in the array)
+        const photos = ctx.message.photo;
+        const largest = photos[photos.length - 1];
+        const file = await ctx.api.getFile(largest.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+
+        const buffer = await downloadFile(fileUrl);
+        const groupDir = this.resolveGroupDir(group.folder);
+        const savePath = path.join(
+          groupDir,
+          'attachments',
+          `photo_${ctx.message.message_id}.jpg`,
+        );
+        const image = await processImage(buffer, savePath);
+
+        this.opts.onMessage(chatJid, {
+          id: ctx.message.message_id.toString(),
+          chat_jid: chatJid,
+          sender: ctx.from?.id?.toString() || '',
+          sender_name: senderName,
+          content: `[Photo: attachments/photo_${ctx.message.message_id}.jpg]${caption}`,
+          timestamp,
+          is_from_me: false,
+          images: [{ base64: image.base64, mimeType: image.mimeType }],
+        });
+
+        logger.info(
+          { chatJid, sender: senderName },
+          'Processed image attachment from Telegram',
+        );
+      } catch (err) {
+        logger.error({ chatJid, err }, 'Image - download/processing failed');
+        storeNonText(ctx, '[Photo - failed to process]');
+      }
+    });
+
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
-    this.bot.on('message:document', (ctx) => {
-      const name = ctx.message.document?.file_name || 'file';
+    this.bot.on('message:document', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const doc = ctx.message.document;
+      const name = doc?.file_name || 'file';
+      const mime = doc?.mime_type || '';
+
+      // Handle PDF documents specially — download to group workspace
+      if (mime === 'application/pdf') {
+        try {
+          const file = await ctx.api.getFile(doc!.file_id);
+          const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+          const buffer = await downloadFile(fileUrl);
+
+          const groupDir = this.resolveGroupDir(group.folder);
+          const attachDir = path.join(groupDir, 'attachments');
+          fs.mkdirSync(attachDir, { recursive: true });
+
+          const safeName = name.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const savePath = path.join(attachDir, safeName);
+          fs.writeFileSync(savePath, buffer);
+
+          logger.info(
+            { chatJid, file: safeName, size: buffer.length },
+            'Downloaded PDF attachment',
+          );
+
+          storeNonText(
+            ctx,
+            `[PDF document saved: attachments/${safeName} (${Math.round(buffer.length / 1024)}KB)]`,
+          );
+          return;
+        } catch (err) {
+          logger.error({ chatJid, err }, 'Failed to download PDF attachment');
+        }
+      }
+
       storeNonText(ctx, `[Document: ${name}]`);
     });
     this.bot.on('message:sticker', (ctx) => {

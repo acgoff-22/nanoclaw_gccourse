@@ -27,7 +27,7 @@ import {
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import { RegisteredGroup } from './types.js';
+import { MessageImage, RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -41,6 +41,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  images?: MessageImage[];
 }
 
 export interface ContainerOutput {
@@ -207,6 +208,22 @@ function buildVolumeMounts(
       isMain,
     );
     mounts.push(...validatedMounts);
+  }
+
+  // Mount Google Workspace CLI credentials (read-only) if available
+  const gwsCredentials = path.join(
+    process.env.HOME || '/home/node',
+    '.config',
+    'gws',
+    'credentials.json',
+  );
+  if (fs.existsSync(gwsCredentials)) {
+    const gwsDir = path.dirname(gwsCredentials);
+    mounts.push({
+      hostPath: gwsDir,
+      containerPath: '/home/node/.config/gws',
+      readonly: true,
+    });
   }
 
   return mounts;
