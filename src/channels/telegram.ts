@@ -12,6 +12,7 @@ import { ASSISTANT_NAME, DATA_DIR, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { downloadFile, processImage } from '../image.js';
+import { transcribeAudio } from '../transcription.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -330,8 +331,51 @@ export class TelegramChannel implements Channel {
     });
 
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
+    this.bot.on('message:voice', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+      const timestamp = new Date(
+        ctx.message.date * 1000,
+      ).toISOString();
+
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+
+      try {
+        const voice = ctx.message.voice;
+        const file = await ctx.api.getFile(voice.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+        const buffer = await downloadFile(fileUrl);
+
+        const filename = `voice_${ctx.message.message_id}.oga`;
+        const transcript = await transcribeAudio(buffer, filename);
+        const content = transcript
+          ? `[Voice: ${transcript}]`
+          : '[Voice message - transcription unavailable]';
+
+        this.opts.onMessage(chatJid, {
+          id: ctx.message.message_id.toString(),
+          chat_jid: chatJid,
+          sender: ctx.from?.id?.toString() || '',
+          sender_name: senderName,
+          content,
+          timestamp,
+          is_from_me: false,
+        });
+      } catch (err) {
+        logger.error({ chatJid, err }, 'Voice message processing failed');
+        storeNonText(ctx, '[Voice message - transcription failed]');
+      }
+    });
     this.bot.on('message:document', async (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
