@@ -167,7 +167,7 @@ function buildVolumeMounts(
   });
 
   // Gmail credentials directory (for Gmail MCP inside the container)
-  const homeDir = os.homedir();
+  const homeDir = (process.env.HOME || '/home/node');
   const gmailDir = path.join(homeDir, '.gmail-mcp');
   if (fs.existsSync(gmailDir)) {
     mounts.push({
@@ -223,19 +223,21 @@ function buildVolumeMounts(
     mounts.push(...validatedMounts);
   }
 
-  // Mount Google Workspace CLI credentials (read-only) if available
-  const gwsCredentials = path.join(
-    process.env.HOME || '/home/node',
-    '.config',
-    'gws',
-    'credentials.json',
-  );
-  if (fs.existsSync(gwsCredentials)) {
-    const gwsDir = path.dirname(gwsCredentials);
+  // Mount Google Workspace credentials for both gws CLI and MCP server
+  const gwsConfigDir = path.join((process.env.HOME || '/home/node'), '.config', 'gws');
+  if (fs.existsSync(gwsConfigDir)) {
     mounts.push({
-      hostPath: gwsDir,
+      hostPath: gwsConfigDir,
       containerPath: '/home/node/.config/gws',
-      readonly: true,
+      readonly: false,
+    });
+  }
+  const gwsMcpDir = path.join((process.env.HOME || '/home/node'), '.google-workspace-mcp');
+  if (fs.existsSync(gwsMcpDir)) {
+    mounts.push({
+      hostPath: gwsMcpDir,
+      containerPath: '/home/node/.google-workspace-mcp',
+      readonly: false,
     });
   }
 
